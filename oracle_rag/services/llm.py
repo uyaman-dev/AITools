@@ -2,7 +2,7 @@
 from typing import Dict, List, Any, Optional
 import logging
 
-from langchain.llms import OpenAI
+from langchain_community.llms import OpenAI
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 

@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 import os
 import logging
 
-from langchain.vectorstores import Chroma
+from langchain_community.vectorstores import Chroma
 from langchain.schema import Document
 from langchain.embeddings.base import Embeddings
 

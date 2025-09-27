@@ -13,6 +13,7 @@ from .models.schema import SchemaMetadata, QueryResult, SQLGenerationResult
 from .services.embeddings import EmbeddingService
 from .services.vector_store import VectorStoreService
 from .services.llm import LLMService
+from .database.connection import get_db_connection
 
 # Configure logging
 logging.basicConfig(
@@ -41,8 +42,9 @@ class OracleMetadataLLM:
             embedding_model=self.embedding_service.model
         )
         
-        # Initialize metadata extractor
-        self.metadata_extractor = MetadataExtractor(self.schema_name)
+        # Initialize metadata extractor with a connection
+        self.db_connection = None
+        self.metadata_extractor = None
         
         # Cache for schema metadata
         self._schema_metadata = None
@@ -58,8 +60,18 @@ class OracleMetadataLLM:
         """
         if self._schema_metadata is None or force_refresh:
             logger.info(f"Extracting metadata for schema: {self.schema_name}")
-            self._schema_metadata = self.metadata_extractor.get_schema_metadata()
-            logger.info(f"Extracted metadata for {len(self._schema_metadata.tables)} tables")
+            
+            # Create a new connection for the metadata extractor
+            with get_db_connection() as conn:
+                # Initialize the metadata extractor with the connection
+                self.metadata_extractor = MetadataExtractor(
+                    schema_name=self.schema_name,
+                    connection=conn
+                )
+                # Extract metadata using the single connection
+                self._schema_metadata = self.metadata_extractor.get_schema_metadata()
+                logger.info(f"Extracted metadata for {len(self._schema_metadata.tables)} tables")
+                
         return self._schema_metadata
     
     def prepare_documents(self, metadata: SchemaMetadata) -> List[Document]:

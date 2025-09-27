@@ -71,43 +71,57 @@ def get_db_connection(config: Optional[Dict[str, Any]] = None):
 
 
 def execute_query(query: str, params: Optional[Union[tuple, dict, list]] = None, 
-                 fetch_all: bool = True, config: Optional[Dict[str, Any]] = None) -> Union[List[Dict[str, Any]], Dict[str, Any], None]:
+                 fetch_all: bool = True, config: Optional[Dict[str, Any]] = None,
+                 connection=None):
     """Execute a query and return the results.
     
     Args:
         query: SQL query to execute
         params: Optional parameters for the query (can be tuple, dict, or list)
         fetch_all: If True, fetch all results; if False, fetch one
-        config: Optional database configuration
+        config: Optional database configuration (only used if connection is not provided)
+        connection: Optional existing database connection to use
         
     Returns:
         Query results as a list of dictionaries or a single dictionary if fetch_all is False
         Returns None if no results and fetch_all is False
     """
-    with get_db_connection(config) as conn:
-        cursor = conn.cursor()
-        try:
-            # Execute the query with parameters
-            if params is None:
-                cursor.execute(query)
+    if config is None:
+        config = DB_CONFIG
+    
+    def execute_with_connection(conn):
+        with conn.cursor() as cursor:
+            # Convert params to the correct format if it's a list
+            if isinstance(params, list):
+                params_dict = {f"p{i+1}": val for i, val in enumerate(params)}
             else:
-                cursor.execute(query, params)
+                params_dict = params or {}
             
-            # Process results if this is a SELECT query
-            if cursor.description:
+            # Execute the query
+            cursor.execute(query, params_dict)
+            
+            # If it's a SELECT query, fetch results
+            if cursor.description is not None:
                 columns = [col[0] for col in cursor.description]
                 if fetch_all:
-                    rows = cursor.fetchall()
-                    return [dict(zip(columns, row)) for row in rows]
+                    results = cursor.fetchall()
+                    return [dict(zip(columns, row)) for row in results]
                 else:
-                    row = cursor.fetchone()
-                    return dict(zip(columns, row)) if row else None
-            else:
-                # For non-SELECT queries, commit the transaction
-                conn.commit()
-                return {"rowcount": cursor.rowcount}
+                    result = cursor.fetchone()
+                    return dict(zip(columns, result)) if result else None
+            
+            # For non-SELECT queries, return rowcount
+            return cursor.rowcount
+    
+    try:
+        if connection is not None:
+            # Use the provided connection
+            return execute_with_connection(connection)
+        else:
+            # Create a new connection
+            with get_db_connection(config) as conn:
+                return execute_with_connection(conn)
                 
-        except oracledb.Error as e:
-            conn.rollback()
-            logger.error(f"Query failed: {query}\nError: {e}")
-            raise
+    except oracledb.Error as e:
+        logger.error(f"Error executing query: {e}")
+        raise

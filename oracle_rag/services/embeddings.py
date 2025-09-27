@@ -2,7 +2,7 @@
 from typing import List, Dict, Any, Optional
 import logging
 
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from ..config.settings import EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__)

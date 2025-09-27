@@ -2,7 +2,7 @@
 from typing import Dict, List, Any, Optional
 import logging
 
-from .connection import execute_query
+from .connection import execute_query, get_db_connection
 from ..models.schema import (
     TableMetadata, 
     ColumnMetadata, 
@@ -16,9 +16,16 @@ logger = logging.getLogger(__name__)
 class MetadataExtractor:
     """Extracts metadata from a database schema."""
     
-    def __init__(self, schema_name: str):
-        """Initialize with the schema name to extract metadata from."""
+    def __init__(self, schema_name: str, connection=None):
+        """Initialize with the schema name to extract metadata from.
+        
+        Args:
+            schema_name: Name of the schema to extract metadata from
+            connection: Optional database connection to reuse. If not provided,
+                      a new connection will be created for each query.
+        """
         self.schema_name = schema_name.upper()
+        self.connection = connection
     
     def get_tables(self) -> List[str]:
         """Get all tables in the schema."""
@@ -28,7 +35,7 @@ class MetadataExtractor:
         WHERE owner = :owner
         ORDER BY table_name
         """
-        result = execute_query(query, (self.schema_name,))
+        result = execute_query(query, params={"owner": self.schema_name}, connection=self.connection)
         return [row['TABLE_NAME'] for row in result]
     
     def get_table_metadata(self, table_name: str) -> TableMetadata:
@@ -41,157 +48,178 @@ class MetadataExtractor:
         AND table_name = :table_name
         """
         comment_result = execute_query(
-            comment_query, 
-            (self.schema_name, table_name),
-            fetch_all=False
+            comment_query,
+            params={"owner": self.schema_name, "table_name": table_name},
+            connection=self.connection
         )
         
-        table_comment = comment_result['COMMENTS'] if comment_result else ""
+        table_comment = comment_result[0]['COMMENTS'] if comment_result else None
         
         # Get columns
-        columns = self._get_columns(table_name)
+        columns = self.get_columns(table_name)
         
         # Get primary keys
-        primary_keys = self._get_primary_keys(table_name)
+        primary_keys = self.get_primary_keys(table_name)
         
         # Get foreign keys
-        foreign_keys = self._get_foreign_keys(table_name)
+        foreign_keys = self.get_foreign_keys(table_name)
         
         return TableMetadata(
             name=table_name,
-            comment=table_comment or "",
+            comment=table_comment,
             columns=columns,
             primary_keys=primary_keys,
             foreign_keys=foreign_keys
         )
     
-    def _get_columns(self, table_name: str) -> List[ColumnMetadata]:
-        """Get column metadata for a table."""
-        # Get column information
-        column_query = """
+    def get_columns(self, table_name: str) -> List[ColumnMetadata]:
+        """Get column information for a table."""
+        # First get the basic column information
+        query = """
         SELECT 
-            column_name, 
-            data_type, 
-            data_length,
-            data_precision,
-            data_scale,
-            nullable,
-            data_default
-        FROM all_tab_columns
-        WHERE owner = :owner 
-        AND table_name = :table_name
-        ORDER BY column_id
+            c.column_name, 
+            c.data_type,
+            c.data_length,
+            c.data_precision,
+            c.data_scale,
+            c.nullable,
+            c.data_default,
+            c.char_length,
+            cc.comments
+        FROM all_tab_columns c
+        LEFT JOIN all_col_comments cc 
+            ON c.owner = cc.owner 
+            AND c.table_name = cc.table_name 
+            AND c.column_name = cc.column_name
+        WHERE c.owner = :owner 
+        AND c.table_name = :table_name
+        ORDER BY c.column_id
         """
-        columns = execute_query(
-            column_query, 
-            (self.schema_name, table_name)
+        result = execute_query(
+            query, 
+            params={"owner": self.schema_name, "table_name": table_name},
+            connection=self.connection
         )
         
-        # Get column comments
-        comment_query = """
-        SELECT 
-            column_name,
-            comments
-        FROM all_col_comments
-        WHERE owner = :owner
-        AND table_name = :table_name
-        """
-        comments = execute_query(
-            comment_query,
-            (self.schema_name, table_name)
-        )
-        
-        # Create a mapping of column names to comments
-        comment_map = {c['COLUMN_NAME']: c['COMMENTS'] for c in comments}
-        
-        # Create ColumnMetadata objects
-        result = []
-        for col in columns:
-            result.append(ColumnMetadata(
-                name=col['COLUMN_NAME'],
-                data_type=col['DATA_TYPE'],
-                length=col['DATA_LENGTH'],
-                precision=col['DATA_PRECISION'],
-                scale=col['DATA_SCALE'],
-                nullable=col['NULLABLE'] == 'Y',
-                default_value=col['DATA_DEFAULT'],
-                comment=comment_map.get(col['COLUMN_NAME'])
+        columns = []
+        for row in result:
+            columns.append(ColumnMetadata(
+                name=row['COLUMN_NAME'],
+                data_type=row['DATA_TYPE'],
+                length=row['CHAR_LENGTH'] or row['DATA_LENGTH'],
+                precision=row['DATA_PRECISION'],
+                scale=row['DATA_SCALE'],
+                nullable=row['NULLABLE'] == 'Y',
+                default_value=row['DATA_DEFAULT'],
+                comment=row['COMMENTS']
             ))
-            
-        return result
+        return columns
     
-    def _get_primary_keys(self, table_name: str) -> List[PrimaryKey]:
+    def get_primary_keys(self, table_name: str) -> List[PrimaryKey]:
         """Get primary key information for a table."""
         query = """
-        SELECT cols.column_name, cols.position
-        FROM all_constraints cons, all_cons_columns cols
-        WHERE cons.constraint_type = 'P'
-        AND cons.constraint_name = cols.constraint_name
-        AND cons.owner = :owner
-        AND cols.owner = :owner
+        SELECT 
+            cols.column_name,
+            cons.constraint_name,
+            cols.position
+        FROM all_cons_columns cols
+        JOIN all_constraints cons 
+            ON cols.owner = cons.owner 
+            AND cols.constraint_name = cons.constraint_name
+        WHERE cons.owner = :owner
         AND cons.table_name = :table_name
+        AND cons.constraint_type = 'P'
         ORDER BY cols.position
         """
         result = execute_query(
             query,
-            (self.schema_name, self.schema_name, table_name)
+            params={"owner": self.schema_name, "table_name": table_name},
+            connection=self.connection
         )
         
         return [
             PrimaryKey(
                 column_name=row['COLUMN_NAME'],
+                constraint_name=row['CONSTRAINT_NAME'],
                 position=row['POSITION']
             )
             for row in result
         ]
     
-    def _get_foreign_keys(self, table_name: str) -> List[ForeignKey]:
+    def get_foreign_keys(self, table_name: str) -> List[ForeignKey]:
         """Get foreign key information for a table."""
         query = """
-            SELECT 
-                a.column_name as column_name,
-                c_pk.owner as referenced_owner,
-                c_pk.table_name as referenced_table, 
-                b.column_name as referenced_column,
-                c.constraint_name as constraint_name
-            FROM all_cons_columns a
-            JOIN all_constraints c ON a.owner = c.owner AND a.constraint_name = c.constraint_name
-            JOIN all_constraints c_pk ON c.r_owner = c_pk.owner AND c.r_constraint_name = c_pk.constraint_name
-            JOIN all_cons_columns b ON b.owner = c_pk.owner AND b.constraint_name = c_pk.constraint_name
-            WHERE c.constraint_type = 'R' 
-            AND a.owner = :owner
-            AND a.table_name = :table_name
-            AND a.position = b.position
+        SELECT 
+            a.constraint_name,
+            a.column_name,
+            a.position,
+            c_pk.owner as referenced_owner,
+            c_pk.table_name as referenced_table,
+            b.column_name as referenced_column
+        FROM all_cons_columns a
+        JOIN all_constraints c 
+            ON a.owner = c.owner 
+            AND a.constraint_name = c.constraint_name
+        JOIN all_constraints c_pk 
+            ON c.r_owner = c_pk.owner 
+            AND c.r_constraint_name = c_pk.constraint_name
+        JOIN all_cons_columns b 
+            ON c_pk.owner = b.owner 
+            AND c_pk.constraint_name = b.constraint_name 
+            AND b.position = a.position
+        WHERE c.constraint_type = 'R'
+        AND a.owner = :owner
+        AND a.table_name = :table_name
+        ORDER BY a.constraint_name, a.position
         """
+        
         result = execute_query(
             query,
-            (self.schema_name, table_name)
+            params={"owner": self.schema_name, "table_name": table_name},
+            connection=self.connection
         )
         
         return [
             ForeignKey(
+                constraint_name=row['CONSTRAINT_NAME'],
                 column_name=row['COLUMN_NAME'],
                 referenced_owner=row['REFERENCED_OWNER'],
                 referenced_table=row['REFERENCED_TABLE'],
-                referenced_column=row['REFERENCED_COLUMN'],
-                constraint_name=row['CONSTRAINT_NAME']
+                referenced_column=row['REFERENCED_COLUMN']
             )
             for row in result
         ]
     
     def get_schema_metadata(self) -> SchemaMetadata:
-        """Get metadata for the entire schema."""
-        tables = self.get_tables()
-        table_metadata = {}
+        """Get metadata for all tables in the schema using a single connection."""
+        tables = {}
         
-        for table in tables:
-            try:
-                table_metadata[table] = self.get_table_metadata(table)
-            except Exception as e:
-                logger.error(f"Error getting metadata for table {table}: {e}")
-                continue
+        # Get all table names first
+        table_names = self.get_tables()
+        
+        # If we don't have a connection yet, create one and use it for all operations
+        if self.connection is None:
+            with get_db_connection() as conn:
+                self.connection = conn
+                for table_name in table_names:
+                    try:
+                        table_metadata = self.get_table_metadata(table_name)
+                        tables[table_name] = table_metadata
+                        logger.debug(f"Extracted metadata for table: {table_name}")
+                    except Exception as e:
+                        logger.error(f"Error extracting metadata for table {table_name}: {e}")
+                        continue
+                # Clear the connection after we're done
+                self.connection = None
+        else:
+            # If we were given a connection, use it but don't close it
+            for table_name in table_names:
+                try:
+                    table_metadata = self.get_table_metadata(table_name)
+                    tables[table_name] = table_metadata
+                    logger.debug(f"Extracted metadata for table: {table_name}")
+                except Exception as e:
+                    logger.error(f"Error extracting metadata for table {table_name}: {e}")
+                    continue
                 
-        return SchemaMetadata(
-            name=self.schema_name,
-            tables=table_metadata
-        )
+        return SchemaMetadata(name=self.schema_name, tables=tables)

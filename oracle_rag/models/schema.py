@@ -20,17 +20,18 @@ class ColumnMetadata:
 class PrimaryKey:
     """Primary key information."""
     column_name: str
+    constraint_name: str
     position: int
 
 
 @dataclass
 class ForeignKey:
     """Foreign key relationship information."""
+    constraint_name: str
     column_name: str
-    referenced_owner: str
+    referenced_owner: str  # This is the same as referenced_schema in the query
     referenced_table: str
     referenced_column: str
-    constraint_name: str
 
 
 @dataclass
