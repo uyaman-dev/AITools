@@ -104,8 +104,9 @@ class LLMService:
         
         CRITICAL INSTRUCTIONS:
         1. The query MUST be complete and executable
-        2. Every table alias used in the SELECT clause MUST be defined in the FROM/JOIN clauses
-        3. All JOIN conditions MUST be complete with both sides of the condition specified
+        2. If the required data doesn't exist, return a SELECT that explains what's missing
+        3. Every table alias used in the SELECT clause MUST be defined in the FROM/JOIN clauses
+        4. All JOIN conditions MUST be complete with both sides of the condition specified
         
         Required Query Components:
         - All tables used in SELECT must be properly joined in the FROM/JOIN clauses
@@ -156,12 +157,36 @@ class LLMService:
                 | self.llm
             )
             
-            # Generate the SQL
-            response = chain.invoke({
-                "schema_context": schema_context,
+            # Prepare and log the request
+            request_data = {
+                "schema_context": schema_context[:500] + '...' if len(schema_context) > 500 else schema_context,
                 "question": question,
                 "tables": tables_str
-            })
+            }
+            
+            logger.info("=== LLM REQUEST ===")
+            logger.info(f"Question: {request_data['question']}")
+            logger.info(f"Tables: {request_data['tables']}")
+            logger.debug(f"Schema Context: {request_data['schema_context']}")
+            
+            # Generate the SQL
+            response = chain.invoke(request_data)
+            
+            # Log the raw response
+            logger.info("=== LLM RESPONSE ===")
+            logger.info(f"Response type: {type(response)}")
+            
+            if hasattr(response, 'content'):
+                if isinstance(response.content, list):
+                    logger.info(f"Response contains {len(response.content)} parts")
+                    for i, part in enumerate(response.content):
+                        logger.info(f"Part {i+1} type: {type(part)}")
+                        if hasattr(part, 'text'):
+                            logger.info(f"Part {i+1} text: {part.text[:500]}...")
+                else:
+                    logger.info(f"Response content: {str(response.content)[:500]}...")
+            else:
+                logger.info(f"Response: {str(response)[:500]}...")
 
             # Clean up the response
             sql = self._clean_sql_response(response)
@@ -186,20 +211,41 @@ class LLMService:
         Returns:
             Cleaned SQL query
         """
-        # Extract content if response is an AIMessage
+        # Extract content if response is an AIMessage or has a content attribute
         if hasattr(response, 'content'):
             content = response.content
+            # Handle case where content might be a list of parts (common in Gemini)
+            if isinstance(content, list):
+                content = ' '.join(str(part) for part in content)
         else:
             content = str(response)
+
+        # Clean up the content
+        content = content.strip()
 
         # Remove markdown code block markers if present
         if "```sql" in content:
             content = content.split("```sql")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
+            
+        # Remove any leading/trailing quotes if present
+        content = content.strip("'\"`")
+        
+        # Ensure we have a valid SQL query
+        if not content or not content.upper().startswith(('SELECT', 'WITH')):
+            # Try to extract SQL from the response if it's not in the expected format
+            import re
+            sql_match = re.search(r'(?i)(?:SELECT|WITH).*?(?:;|$)', content, re.DOTALL)
+            if sql_match:
+                content = sql_match.group(0).strip()
+            else:
+                logger.warning(f"Could not extract valid SQL from response: {content}")
+                return ""
+                
+        return content
 
-        # Remove any leading/trailing whitespace and newlines
-        return content.strip()
+        return content
 
     def get_llm_chain(self, prompt_template: str, **kwargs) -> LLMChain:
         """Create a generic LLM chain with the given prompt template.
