@@ -1,16 +1,18 @@
 """LLM service for natural language to SQL conversion with multiple provider support."""
+import logging
 import os
 from enum import Enum
-from typing import Dict, List, Any, Optional, Union
-import logging
+from typing import List, Optional, Union, Dict, Any
 
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
 from langchain_community.llms import OpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from ..config.settings import LLM_SETTINGS
 from ..models.schema import SQLGenerationResult
+
 
 class LLMProvider(str, Enum):
     """Supported LLM providers."""
@@ -100,13 +102,40 @@ class LLMService:
         
         Consider these tables that might be relevant: {tables}
         
-        Important guidelines:
-        1. Use proper table aliases for clarity
-        2. Include all necessary joins based on foreign key relationships
-        3. Use appropriate WHERE clauses to filter the data
-        4. Format the SQL for readability
+        CRITICAL INSTRUCTIONS:
+        1. The query MUST be complete and executable
+        2. Every table alias used in the SELECT clause MUST be defined in the FROM/JOIN clauses
+        3. All JOIN conditions MUST be complete with both sides of the condition specified
         
-        Return ONLY the SQL query, nothing else.
+        Required Query Components:
+        - All tables used in SELECT must be properly joined in the FROM/JOIN clauses
+        - All JOIN conditions must be complete (e.g., ON e.department_id = d.department_id)
+        - Include all necessary columns in the SELECT clause
+        - Use appropriate WHERE, GROUP BY, HAVING, and ORDER BY clauses as needed
+        
+        Formatting Guidelines:
+        - Use proper indentation for readability
+        - Use consistent table aliases (e.g., employees e, departments d, locations l, countries c)
+        - DO NOT include a semicolon (;) at the end of the query
+        
+        Example of a complete query:
+        SELECT
+            c.country_name,
+            COUNT(e.employee_id) AS employee_count
+        FROM
+            employees e
+            JOIN departments d ON e.department_id = d.department_id
+            JOIN locations l ON d.location_id = l.location_id
+            JOIN countries c ON l.country_id = c.country_id
+        GROUP BY
+            c.country_name
+        
+        Before returning the query, verify that:
+        1. All table aliases in SELECT are defined in FROM/JOIN
+        2. All JOIN conditions are complete
+        3. The query would execute without errors
+        
+        Return ONLY the complete, valid SQL query, nothing else. Do not include a semicolon at the end.
         """
 
         try:
@@ -148,23 +177,29 @@ class LLMService:
             raise
 
     @staticmethod
-    def _clean_sql_response(response: str) -> str:
+    def _clean_sql_response(response) -> str:
         """Clean up the SQL response from the LLM.
 
         Args:
-            response: Raw response from the LLM
+            response: Raw response from the LLM (can be string or AIMessage)
 
         Returns:
             Cleaned SQL query
         """
+        # Extract content if response is an AIMessage
+        if hasattr(response, 'content'):
+            content = response.content
+        else:
+            content = str(response)
+
         # Remove markdown code block markers if present
-        if "```sql" in response:
-            response = response.split("```sql")[1].split("```")[0].strip()
-        elif "```" in response:
-            response = response.split("```")[1].split("```")[0].strip()
+        if "```sql" in content:
+            content = content.split("```sql")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
 
         # Remove any leading/trailing whitespace and newlines
-        return response.strip()
+        return content.strip()
 
     def get_llm_chain(self, prompt_template: str, **kwargs) -> LLMChain:
         """Create a generic LLM chain with the given prompt template.
@@ -178,14 +213,11 @@ class LLMService:
         """
         prompt = PromptTemplate(
             template=prompt_template,
-            input_variables=kwargs.pop("input_variables", None)
+            input_variables=kwargs.pop("input_variables", [])
         )
-
-        return LLMChain(
-            llm=self.llm,
-            prompt=prompt,
-            **kwargs
-        )
+        
+        # Use the new RunnableSequence syntax (|) to chain prompt and LLM
+        return prompt | self.llm
         
     def explain_sql(self, sql: str, question: str) -> str:
         """Generate a natural language explanation of a SQL query.
@@ -218,9 +250,12 @@ class LLMService:
                 input_variables=["sql", "question"]
             )
             
-            # Generate the explanation
-            explanation = chain.run(sql=sql, question=question)
-            return explanation.strip()
+            # Generate the explanation using invoke() and handle AIMessage response
+            response = chain.invoke({"sql": sql, "question": question})
+            # Extract content from AIMessage if needed
+            if hasattr(response, 'content'):
+                return response.content.strip()
+            return str(response).strip()
             
         except Exception as e:
             logger.error(f"Error generating SQL explanation: {e}")

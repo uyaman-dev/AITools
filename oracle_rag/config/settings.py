@@ -29,11 +29,13 @@ LLM_SETTINGS = {
         "model_name": os.getenv("OPENAI_MODEL", "gpt-3.5-turbo-instruct"),
         "temperature": float(os.getenv("LLM_TEMPERATURE", "0.3")),
         "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "1000")),
+        "request_timeout": int(os.getenv("LLM_REQUEST_TIMEOUT", "30")),  # seconds
     },
     "gemini": {
         "model_name": os.getenv("GEMINI_MODEL", "gemini-2.5-pro"),
         "temperature": float(os.getenv("LLM_TEMPERATURE", "0.3")),
         "max_tokens": int(os.getenv("LLM_MAX_TOKENS", "1000")),
+        "request_timeout": int(os.getenv("LLM_REQUEST_TIMEOUT", "30")),  # seconds
     }
 }
 

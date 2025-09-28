@@ -169,8 +169,27 @@ class OracleMetadataLLM:
         Returns:
             SQLGenerationResult containing the generated SQL and metadata
         """
-        # First, find relevant schema information
-        search_result = self.vector_store.similarity_search(question)
+        # First, get all tables in the schema
+        all_tables = self.extract_metadata().tables.keys()
+        logger.info(f"Found {len(all_tables)} tables in schema")
+        
+        # If we have a reasonable number of tables, use them all
+        if len(all_tables) <= 20:  # Adjust this threshold as needed
+            relevant_tables = list(all_tables)
+            # Get context for all tables
+            search_result = self.vector_store.similarity_search(
+                question, 
+                k=len(all_tables)  # Get all tables
+            )
+        else:
+            # For larger schemas, first find the most relevant tables
+            search_result = self.vector_store.similarity_search(
+                question,
+                k=min(20, len(all_tables))  # Get top 20 most relevant tables
+            )
+            relevant_tables = search_result.tables
+        
+        logger.info(f"Using {len(relevant_tables)} tables for SQL generation")
         
         # Format context for the prompt
         schema_context = "\n\n".join([
@@ -182,8 +201,42 @@ class OracleMetadataLLM:
         return self.llm_service.generate_sql(
             question=question,
             schema_context=schema_context,
-            tables=search_result.tables
+            tables=relevant_tables
         )
+    
+    @staticmethod
+    def _validate_sql(sql: str) -> bool:
+        """Basic validation of SQL query.
+        
+        Args:
+            sql: SQL query to validate
+            
+        Returns:
+            bool: True if SQL appears valid, False otherwise
+        """
+        # Check for common SQL syntax issues
+        sql_upper = sql.upper().strip()
+        
+        # Check for common patterns that indicate an incomplete query
+        incomplete_patterns = [
+            'SELECT',  # Must have at least SELECT and FROM
+            'FROM',    # Must have a table to select from
+            'JOIN',    # If JOIN is present, must have ON clause
+            'WHERE',   # If WHERE is present, must have condition
+            'GROUP BY',# If GROUP BY is present, must have columns
+            'HAVING',  # If HAVING is present, must have condition
+            'ORDER BY' # If ORDER BY is present, must have columns
+        ]
+        
+        # Check that the query has at least SELECT and FROM
+        if 'SELECT' not in sql_upper or 'FROM' not in sql_upper:
+            return False
+            
+        # Check for incomplete JOINs
+        if 'JOIN' in sql_upper and 'ON' not in sql_upper:
+            return False
+            
+        return True
     
     def execute_query(self, sql: str) -> QueryResult:
         """Execute a SQL query and return the results.
@@ -196,7 +249,19 @@ class OracleMetadataLLM:
         """
         from .database.connection import execute_query as db_execute_query
         
+        # Clean and validate the SQL
+        sql = sql.strip()
+        if not self._validate_sql(sql):
+            error_msg = "Invalid or incomplete SQL query generated"
+            logger.error(f"{error_msg}: {sql}")
+            return QueryResult(
+                success=False,
+                error=error_msg,
+                sql=sql
+            )
+        
         try:
+            logger.debug(f"Executing SQL: {sql}")
             result = db_execute_query(sql, config=self.config)
             return QueryResult(
                 success=True,
@@ -222,11 +287,14 @@ class OracleMetadataLLM:
             Dictionary containing the SQL, results, and metadata
         """
         # Generate SQL
+        print("\n=== GENERATE SQL ===")
         gen_result = self.generate_sql(question)
-        
+
+        print("\n=== EXECUTE QUERY ===")
         # Execute the query
         query_result = self.execute_query(gen_result.sql)
-        
+
+        print("\n=== EXPLAIN SQL ===")
         # Generate explanation
         explanation = self.llm_service.explain_sql(
             sql=gen_result.sql,
