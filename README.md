@@ -125,6 +125,49 @@ oracle_rag/
 | `LOG_LEVEL`        | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | INFO |
 | `LLM_PROVIDER`     | Default LLM provider (openai or gemini) | gemini (can be overridden in code) |
 
+## Example Queries
+
+### Schema Exploration
+```bash
+# List all tables in the schema
+python -m oracle_rag.main query "List all tables in the schema" --schema HR
+
+# Show table structure
+python -m oracle_rag.main query "Describe the EMPLOYEES table" --schema HR
+
+# Find tables with specific columns
+python -m oracle_rag.main query "Which tables contain salary information?" --schema HR
+
+# Get table relationships
+python -m oracle_rag.main query "How are EMPLOYEES and DEPARTMENTS related?" --schema HR
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### Database Connection Issues
+- **Error: ORA-12541: TNS:no listener**
+  - Ensure the database is running and accessible
+  - Verify the host and port in your `.env` file
+  - Check if your Oracle client is properly configured
+
+#### LLM API Issues
+- **Authentication errors**
+  - Verify your API key is correctly set in the `.env` file
+  - Check if you have sufficient credits/quota with the LLM provider
+
+#### Memory Issues
+- If you encounter memory errors with large schemas:
+  - Try increasing the chunk size in the configuration
+  - Filter the schema to include only necessary tables
+
+## Performance Tips
+
+- For large databases, consider extracting metadata during off-peak hours
+- The vector store is persistent between sessions - you only need to rebuild it when the schema changes
+- Use more specific queries to get faster and more accurate results
+
 ## Contributing
 
 1. Fork the repository
@@ -132,10 +175,6 @@ oracle_rag/
 3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
