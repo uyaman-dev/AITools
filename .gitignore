@@ -3,3 +3,5 @@
 .idea
 *.iml
 oracle_rag/vector_store
+# Python
+__pycache__/
