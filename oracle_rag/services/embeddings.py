@@ -26,11 +26,18 @@ class EmbeddingService:
         """Lazy load the embedding model."""
         if self._model is None:
             logger.info(f"Loading embedding model: {self.model_name}")
-            self._model = HuggingFaceEmbeddings(
-                model_name=self.model_name,
-                model_kwargs={'device': 'cpu'},  # Use 'cuda' if GPU is available
-                encode_kwargs={'normalize_embeddings': True}
-            )
+            try:
+                self._model = HuggingFaceEmbeddings(
+                    model_name=self.model_name,
+                    model_kwargs={'device': 'cpu'},  # Use 'cuda' if GPU is available
+                    encode_kwargs={'normalize_embeddings': True}
+                )
+                # Test the model with a simple embedding
+                test_embedding = self._model.embed_query("test")
+                logger.info(f"Successfully loaded embedding model. Test embedding shape: {len(test_embedding) if test_embedding is not None else 'None'}")
+            except Exception as e:
+                logger.error(f"Failed to load embedding model: {e}")
+                raise
         return self._model
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:

@@ -85,15 +85,31 @@ class OracleMetadataLLM:
         """
         documents = []
         
+        if not metadata or not hasattr(metadata, 'tables') or not metadata.tables:
+            logger.error("No tables found in metadata")
+            return documents
+            
+        logger.info(f"Preparing documents for {len(metadata.tables)} tables")
+        
         for table_name, table in metadata.tables.items():
+            if not table_name:
+                logger.warning("Skipping table with empty name")
+                continue
+                
+            table_content = (
+                f"Table: {table_name}\n"
+                f"Description: {table.comment or 'No description available'}\n"
+                f"Primary Keys: {', '.join(pk.column_name for pk in table.primary_keys)}\n"
+                f"Columns: {', '.join(col.name for col in table.columns)}"
+            )
+            
+            if not table_content.strip():
+                logger.warning(f"Empty content for table: {table_name}")
+                continue
+                
             # Table level document
             table_doc = Document(
-                page_content=(
-                    f"Table: {table_name}\n"
-                    f"Description: {table.comment or 'No description available'}\n"
-                    f"Primary Keys: {', '.join(pk.column_name for pk in table.primary_keys)}\n"
-                    f"Columns: {', '.join(col.name for col in table.columns)}"
-                ),
+                page_content=table_content,
                 metadata={
                     "type": "table",
                     "table_name": table_name,

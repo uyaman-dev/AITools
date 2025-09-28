@@ -3,7 +3,7 @@ from typing import List, Dict, Any, Optional
 import os
 import logging
 
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain.schema import Document
 from langchain.embeddings.base import Embeddings
 
@@ -65,11 +65,34 @@ class VectorStoreService:
             documents: List of Document objects to add
         """
         try:
+            if not documents:
+                logger.warning("No documents provided to add to vector store")
+                return
+                
+            logger.info(f"Adding {len(documents)} documents to vector store")
+            
+            # Log first document structure for debugging
+            if documents:
+                first_doc = documents[0]
+                logger.debug(f"First document content type: {type(first_doc.page_content)}")
+                logger.debug(f"First document metadata: {first_doc.metadata}")
+                logger.debug(f"First 100 chars of content: {first_doc.page_content[:100]}...")
+            
+            # Try to embed a sample text to test the embedding model
+            try:
+                sample_text = "This is a test document"
+                embedding = self.embedding_model.embed_query(sample_text)
+                logger.info(f"Successfully generated test embedding. Shape: {len(embedding) if embedding is not None else 'None'}")
+            except Exception as e:
+                logger.error(f"Failed to generate test embedding: {e}")
+                raise
+                
+            # Add documents to vector store
             self.vector_store.add_documents(documents)
-            self.vector_store.persist()
-            logger.info(f"Added {len(documents)} documents to vector store")
+            logger.info(f"Successfully added {len(documents)} documents to vector store")
+            
         except Exception as e:
-            logger.error(f"Error adding documents to vector store: {e}")
+            logger.error(f"Error adding documents to vector store: {e}", exc_info=True)
             raise
     
     def similarity_search(self, query: str, k: int = 5, **kwargs) -> SearchResult:
